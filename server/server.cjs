@@ -3,11 +3,13 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const { randomBytes } = require('crypto');
+const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || 3001);
 const DATA_PATH = path.join(__dirname, 'data.json');
 const UPLOAD_DIR = path.join(__dirname, 'storage', 'uploads');
 const streamClients = new Map();
+const chatClients = new Map();
 
 const MIME_MAP = {
   '.png': 'image/png',
@@ -48,6 +50,11 @@ function writeSSE(res, event, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+function sendWs(socket, payload) {
+  if (!socket || socket.readyState !== 1) return;
+  socket.send(JSON.stringify(payload));
+}
+
 function registerStreamClient(familyId, res) {
   if (!streamClients.has(familyId)) {
     streamClients.set(familyId, new Set());
@@ -64,12 +71,36 @@ function unregisterStreamClient(familyId, res) {
   }
 }
 
+function registerChatClient(familyId, socket) {
+  if (!chatClients.has(familyId)) {
+    chatClients.set(familyId, new Set());
+  }
+  chatClients.get(familyId).add(socket);
+}
+
+function unregisterChatClient(familyId, socket) {
+  const group = chatClients.get(familyId);
+  if (!group) return;
+  group.delete(socket);
+  if (group.size === 0) {
+    chatClients.delete(familyId);
+  }
+}
+
 function broadcastFamilyEvent(familyId, event, payload = {}) {
   const group = streamClients.get(familyId);
   if (!group || group.size === 0) return;
   const data = { ...payload, ts: Date.now() };
   for (const client of group) {
     writeSSE(client, event, data);
+  }
+}
+
+function broadcastChatEvent(familyId, payload) {
+  const group = chatClients.get(familyId);
+  if (!group || group.size === 0) return;
+  for (const client of group) {
+    sendWs(client, payload);
   }
 }
 
@@ -82,6 +113,191 @@ function buildNotificationView(item) {
 
 function computeUnreadCount(db, familyId) {
   return db.notifications.filter((item) => item.familyId === familyId && !item.isRead).length;
+}
+
+function ensureChatData(db, familyId) {
+  let changed = false;
+
+  if (!Array.isArray(db.chatConversations)) {
+    db.chatConversations = [];
+    changed = true;
+  }
+  if (!Array.isArray(db.chatMessages)) {
+    db.chatMessages = [];
+    changed = true;
+  }
+  if (!db.nextIds) {
+    db.nextIds = {};
+    changed = true;
+  }
+  if (!db.nextIds.conversation) {
+    db.nextIds.conversation = 1;
+    changed = true;
+  }
+  if (!db.nextIds.chatMessage) {
+    db.nextIds.chatMessage = 1;
+    changed = true;
+  }
+
+  const familyUsers = db.users.filter((item) => item.familyId === familyId);
+  if (familyUsers.length === 0) {
+    return changed;
+  }
+
+  const familyConversations = db.chatConversations.filter((item) => item.familyId === familyId);
+  if (familyConversations.length === 0) {
+    const now = Date.now();
+    const conversationId = nextId(db, 'conversation', 'c');
+    const participantIds = familyUsers.map((item) => item.id);
+    const readStates = {};
+    participantIds.forEach((id) => {
+      readStates[id] = new Date(now - 5 * 60 * 1000).toISOString();
+    });
+
+    const conversation = {
+      id: conversationId,
+      familyId,
+      name: '林氏家族群',
+      type: 'group',
+      participantIds,
+      readStates,
+      updatedAt: new Date(now).toISOString(),
+      lastMessageId: ''
+    };
+    db.chatConversations.push(conversation);
+
+    const fallbackSender = familyUsers.find((item) => item.id !== participantIds[0]) || familyUsers[0];
+    const welcomeMessage = {
+      id: nextId(db, 'chatMessage', 'cm'),
+      familyId,
+      conversationId,
+      senderId: fallbackSender.id,
+      type: 'text',
+      content: '欢迎来到家族消息频道，大家可以在这里沟通祭祖、家宴和修谱安排。',
+      createdAt: new Date(now - 2 * 60 * 1000).toISOString()
+    };
+    db.chatMessages.push(welcomeMessage);
+    conversation.lastMessageId = welcomeMessage.id;
+    conversation.updatedAt = welcomeMessage.createdAt;
+    changed = true;
+  }
+
+  for (const conversation of db.chatConversations.filter((item) => item.familyId === familyId)) {
+    let localChanged = false;
+
+    if (!Array.isArray(conversation.participantIds) || conversation.participantIds.length === 0) {
+      conversation.participantIds = familyUsers.map((item) => item.id);
+      localChanged = true;
+    } else {
+      const nextParticipants = conversation.participantIds.filter((id, index, arr) => {
+        return arr.indexOf(id) === index && familyUsers.some((user) => user.id === id);
+      });
+      if (nextParticipants.length !== conversation.participantIds.length) {
+        conversation.participantIds = nextParticipants;
+        localChanged = true;
+      }
+      if (conversation.participantIds.length === 0) {
+        conversation.participantIds = familyUsers.map((item) => item.id);
+        localChanged = true;
+      }
+    }
+
+    if (!conversation.readStates || typeof conversation.readStates !== 'object') {
+      conversation.readStates = {};
+      localChanged = true;
+    }
+
+    const fallbackReadAt = conversation.updatedAt || new Date().toISOString();
+    for (const participantId of conversation.participantIds) {
+      if (!conversation.readStates[participantId]) {
+        conversation.readStates[participantId] = fallbackReadAt;
+        localChanged = true;
+      }
+    }
+
+    if (!conversation.updatedAt) {
+      conversation.updatedAt = new Date().toISOString();
+      localChanged = true;
+    }
+
+    if (localChanged) {
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function isConversationMember(conversation, userId) {
+  return Array.isArray(conversation.participantIds) && conversation.participantIds.includes(userId);
+}
+
+function buildChatMessage(db, message) {
+  const sender = db.users.find((item) => item.id === message.senderId);
+  return {
+    id: message.id,
+    conversationId: message.conversationId,
+    sender: {
+      id: sender?.id || message.senderId,
+      name: sender?.name || '未知成员',
+      role: sender?.role || '成员',
+      avatar: sender?.avatar || ''
+    },
+    type: message.type || 'text',
+    content: message.content || '',
+    createdAt: message.createdAt
+  };
+}
+
+function getConversationLastMessage(db, conversation) {
+  if (conversation.lastMessageId) {
+    const byId = db.chatMessages.find((item) => item.id === conversation.lastMessageId);
+    if (byId) return byId;
+  }
+  const sorted = db.chatMessages
+    .filter((item) => item.conversationId === conversation.id)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return sorted[0] || null;
+}
+
+function computeConversationUnreadCount(db, conversation, userId) {
+  const readAt = new Date(conversation.readStates?.[userId] || 0).getTime();
+  return db.chatMessages.filter((item) => {
+    if (item.conversationId !== conversation.id) return false;
+    if (item.senderId === userId) return false;
+    return new Date(item.createdAt).getTime() > readAt;
+  }).length;
+}
+
+function buildConversationView(db, conversation, currentUserId) {
+  const participants = (conversation.participantIds || []).map((participantId) => {
+    const user = db.users.find((item) => item.id === participantId);
+    return {
+      id: participantId,
+      name: user?.name || '未知成员',
+      role: user?.role || '成员',
+      avatar: user?.avatar || ''
+    };
+  });
+
+  const lastMessage = getConversationLastMessage(db, conversation);
+  return {
+    id: conversation.id,
+    familyId: conversation.familyId,
+    name: conversation.name || '未命名会话',
+    type: conversation.type || 'group',
+    updatedAt: conversation.updatedAt,
+    participants,
+    unreadCount: computeConversationUnreadCount(db, conversation, currentUserId),
+    lastMessage: lastMessage ? buildChatMessage(db, lastMessage) : null
+  };
+}
+
+function computeChatUnreadTotal(db, familyId, userId) {
+  const conversations = db.chatConversations.filter(
+    (item) => item.familyId === familyId && isConversationMember(item, userId),
+  );
+  return conversations.reduce((sum, item) => sum + computeConversationUnreadCount(db, item, userId), 0);
 }
 
 async function loadDB() {
@@ -109,7 +325,7 @@ async function readBody(req) {
       }
       try {
         resolve(JSON.parse(data));
-      } catch (error) {
+      } catch {
         reject(new Error('JSON 解析失败'));
       }
     });
@@ -170,7 +386,7 @@ function normalizeMoment(db, moment) {
 }
 
 function buildFamilyTree(db, familyId) {
-  const generations = db.generations
+  return db.generations
     .filter((item) => item.familyId === familyId)
     .sort((a, b) => a.order - b.order)
     .map((generation) => {
@@ -198,7 +414,6 @@ function buildFamilyTree(db, familyId) {
         members
       };
     });
-  return generations;
 }
 
 function nextId(db, key, prefix) {
@@ -272,7 +487,7 @@ async function handleSSEStream(req, res, url) {
   });
 }
 
-async function handleApi(req, res, pathname) {
+async function handleApi(req, res, pathname, url) {
   const db = await loadDB();
 
   if (req.method === 'POST' && pathname === '/api/auth/login') {
@@ -313,6 +528,185 @@ async function handleApi(req, res, pathname) {
         avatar: user.avatar,
         familyId: user.familyId
       }
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/chat/conversations') {
+    const user = requireAuth(req, res, db);
+    if (!user) return;
+
+    const changed = ensureChatData(db, user.familyId);
+    if (changed) {
+      await saveDB(db);
+    }
+
+    const conversations = db.chatConversations
+      .filter((item) => item.familyId === user.familyId && isConversationMember(item, user.id))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .map((item) => buildConversationView(db, item, user.id));
+
+    sendJson(res, 200, {
+      conversations,
+      totalUnread: conversations.reduce((sum, item) => sum + item.unreadCount, 0)
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/chat/messages') {
+    const user = requireAuth(req, res, db);
+    if (!user) return;
+
+    const conversationId = url.searchParams.get('conversationId') || '';
+    if (!conversationId) {
+      sendJson(res, 400, { message: '缺少会话 ID' });
+      return;
+    }
+
+    const changed = ensureChatData(db, user.familyId);
+    if (changed) {
+      await saveDB(db);
+    }
+
+    const conversation = db.chatConversations.find(
+      (item) => item.id === conversationId && item.familyId === user.familyId,
+    );
+    if (!conversation) {
+      sendJson(res, 404, { message: '会话不存在' });
+      return;
+    }
+    if (!isConversationMember(conversation, user.id)) {
+      sendJson(res, 403, { message: '无权访问该会话' });
+      return;
+    }
+
+    const messages = db.chatMessages
+      .filter((item) => item.conversationId === conversationId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .map((item) => buildChatMessage(db, item));
+
+    sendJson(res, 200, { messages });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/chat/messages') {
+    const user = requireAuth(req, res, db);
+    if (!user) return;
+
+    const body = await readBody(req);
+    const conversationId = String(body.conversationId || '');
+    const content = String(body.content || '').trim();
+
+    if (!conversationId) {
+      sendJson(res, 400, { message: '缺少会话 ID' });
+      return;
+    }
+    if (!content) {
+      sendJson(res, 400, { message: '消息内容不能为空' });
+      return;
+    }
+
+    const changed = ensureChatData(db, user.familyId);
+    if (changed) {
+      await saveDB(db);
+    }
+
+    const conversation = db.chatConversations.find(
+      (item) => item.id === conversationId && item.familyId === user.familyId,
+    );
+    if (!conversation) {
+      sendJson(res, 404, { message: '会话不存在' });
+      return;
+    }
+    if (!isConversationMember(conversation, user.id)) {
+      sendJson(res, 403, { message: '无权发送消息到该会话' });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const message = {
+      id: nextId(db, 'chatMessage', 'cm'),
+      familyId: user.familyId,
+      conversationId,
+      senderId: user.id,
+      type: 'text',
+      content,
+      createdAt: now
+    };
+    db.chatMessages.push(message);
+
+    if (!conversation.readStates || typeof conversation.readStates !== 'object') {
+      conversation.readStates = {};
+    }
+    conversation.readStates[user.id] = now;
+    conversation.lastMessageId = message.id;
+    conversation.updatedAt = now;
+
+    await saveDB(db);
+
+    const view = buildChatMessage(db, message);
+    broadcastChatEvent(user.familyId, {
+      type: 'chat:message',
+      data: {
+        conversationId,
+        message: view
+      }
+    });
+
+    sendJson(res, 201, { message: view });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/chat/conversations/') && pathname.endsWith('/read')) {
+    const user = requireAuth(req, res, db);
+    if (!user) return;
+
+    const conversationId = pathname.split('/')[4];
+    if (!conversationId) {
+      sendJson(res, 400, { message: '缺少会话 ID' });
+      return;
+    }
+
+    const changed = ensureChatData(db, user.familyId);
+    if (changed) {
+      await saveDB(db);
+    }
+
+    const conversation = db.chatConversations.find(
+      (item) => item.id === conversationId && item.familyId === user.familyId,
+    );
+    if (!conversation) {
+      sendJson(res, 404, { message: '会话不存在' });
+      return;
+    }
+    if (!isConversationMember(conversation, user.id)) {
+      sendJson(res, 403, { message: '无权操作该会话' });
+      return;
+    }
+
+    const lastMessage = getConversationLastMessage(db, conversation);
+    const readAt = lastMessage?.createdAt || new Date().toISOString();
+    if (!conversation.readStates || typeof conversation.readStates !== 'object') {
+      conversation.readStates = {};
+    }
+    conversation.readStates[user.id] = readAt;
+
+    await saveDB(db);
+
+    broadcastChatEvent(user.familyId, {
+      type: 'chat:conversation',
+      data: {
+        action: 'read',
+        conversationId,
+        userId: user.id,
+        readAt
+      }
+    });
+
+    sendJson(res, 200, {
+      ok: true,
+      conversationId,
+      totalUnread: computeChatUnreadTotal(db, user.familyId, user.id)
     });
     return;
   }
@@ -673,7 +1067,7 @@ async function requestHandler(req, res) {
     }
 
     if (pathname.startsWith('/api/')) {
-      await handleApi(req, res, pathname);
+      await handleApi(req, res, pathname, url);
       return;
     }
 
@@ -686,9 +1080,140 @@ async function requestHandler(req, res) {
   }
 }
 
+async function handleChatUpgrade(req, socket, head, wss) {
+  const host = req.headers.host || `localhost:${PORT}`;
+  const url = new URL(req.url, `http://${host}`);
+
+  if (url.pathname !== '/ws/chat') {
+    return false;
+  }
+
+  const token = url.searchParams.get('token') || '';
+  if (!token) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return true;
+  }
+
+  try {
+    const db = await loadDB();
+    const session = db.sessions.find((item) => item.token === token);
+    const user = session ? db.users.find((item) => item.id === session.userId) : null;
+    if (!user) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return true;
+    }
+
+    const changed = ensureChatData(db, user.familyId);
+    if (changed) {
+      await saveDB(db);
+    }
+
+    req.chatUser = user;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.chatUser = user;
+      wss.emit('connection', ws, req);
+    });
+    return true;
+  } catch {
+    socket.destroy();
+    return true;
+  }
+}
+
 ensureUploadDir();
 
-http.createServer(requestHandler).listen(PORT, () => {
+const server = http.createServer(requestHandler);
+const chatWss = new WebSocketServer({ noServer: true });
+
+chatWss.on('connection', (socket) => {
+  const user = socket.chatUser;
+  if (!user) {
+    socket.close();
+    return;
+  }
+
+  registerChatClient(user.familyId, socket);
+  sendWs(socket, {
+    type: 'chat:connected',
+    data: {
+      userId: user.id
+    }
+  });
+
+  socket.on('message', async (raw) => {
+    let payload = null;
+    try {
+      payload = JSON.parse(String(raw || '{}'));
+    } catch {
+      return;
+    }
+
+    if (!payload || typeof payload !== 'object') return;
+
+    if (payload.type === 'chat:ping') {
+      sendWs(socket, { type: 'chat:pong', data: { ts: Date.now() } });
+      return;
+    }
+
+    if (payload.type === 'chat:mark-read') {
+      const conversationId = String(payload?.data?.conversationId || '');
+      if (!conversationId) return;
+
+      try {
+        const db = await loadDB();
+        const conversation = db.chatConversations?.find(
+          (item) => item.id === conversationId && item.familyId === user.familyId,
+        );
+        if (!conversation) return;
+        if (!isConversationMember(conversation, user.id)) return;
+
+        const lastMessage = getConversationLastMessage(db, conversation);
+        const readAt = lastMessage?.createdAt || new Date().toISOString();
+        if (!conversation.readStates || typeof conversation.readStates !== 'object') {
+          conversation.readStates = {};
+        }
+        conversation.readStates[user.id] = readAt;
+        await saveDB(db);
+
+        broadcastChatEvent(user.familyId, {
+          type: 'chat:conversation',
+          data: {
+            action: 'read',
+            conversationId,
+            userId: user.id,
+            readAt
+          }
+        });
+      } catch {
+        // ignore message-level errors
+      }
+    }
+  });
+
+  socket.on('close', () => {
+    unregisterChatClient(user.familyId, socket);
+  });
+
+  socket.on('error', () => {
+    unregisterChatClient(user.familyId, socket);
+  });
+});
+
+server.on('upgrade', (req, socket, head) => {
+  handleChatUpgrade(req, socket, head, chatWss)
+    .then((handled) => {
+      if (!handled) {
+        socket.destroy();
+      }
+    })
+    .catch(() => {
+      socket.destroy();
+    });
+});
+
+server.listen(PORT, () => {
   console.log(`[server] listening on http://localhost:${PORT}`);
   console.log('[server] 测试账号: 13800000000 / 123456');
 });

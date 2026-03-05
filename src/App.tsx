@@ -234,6 +234,7 @@ export default function App() {
         {activeTab === 'profile' && (
           <ProfileView
             token={token}
+            currentUser={session.user}
             unreadCount={unreadCount}
             onNotificationsChanged={setUnreadCount}
             onLogout={handleLogout}

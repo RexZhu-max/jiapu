@@ -8,6 +8,24 @@
       "role": "家族主理人",
       "avatar": "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=100",
       "familyId": "f_1"
+    },
+    {
+      "id": "u_2",
+      "phone": "13800000001",
+      "password": "123456",
+      "name": "林建国",
+      "role": "父亲",
+      "avatar": "https://images.unsplash.com/photo-1697144532799-c94b0344c1cb?auto=format&fit=crop&q=80&w=100",
+      "familyId": "f_1"
+    },
+    {
+      "id": "u_3",
+      "phone": "13800000002",
+      "password": "123456",
+      "name": "林晓",
+      "role": "堂姐",
+      "avatar": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=100",
+      "familyId": "f_1"
     }
   ],
   "families": [
@@ -16,13 +34,7 @@
       "name": "林氏家族"
     }
   ],
-  "sessions": [
-    {
-      "token": "7029b7ecf1d340a3d8520d331d587ff3cb29acb1",
-      "userId": "u_1",
-      "createdAt": "2026-03-05T12:30:41.954Z"
-    }
-  ],
+  "sessions": [],
   "generations": [
     {
       "id": "g_1",
@@ -226,12 +238,54 @@
       "createdAt": "2026-03-04T06:10:00.000Z"
     }
   ],
+  "chatConversations": [
+    {
+      "id": "c_1",
+      "familyId": "f_1",
+      "name": "林氏家族群",
+      "type": "group",
+      "participantIds": [
+        "u_1",
+        "u_2",
+        "u_3"
+      ],
+      "readStates": {
+        "u_1": "2026-03-05T12:00:00.000Z",
+        "u_2": "2026-03-05T12:05:00.000Z",
+        "u_3": "2026-03-05T12:08:00.000Z"
+      },
+      "updatedAt": "2026-03-05T12:10:00.000Z",
+      "lastMessageId": "cm_2"
+    }
+  ],
+  "chatMessages": [
+    {
+      "id": "cm_1",
+      "familyId": "f_1",
+      "conversationId": "c_1",
+      "senderId": "u_2",
+      "type": "text",
+      "content": "周末祭祖安排我来负责车辆，大家把出发地点发到群里。",
+      "createdAt": "2026-03-05T11:58:00.000Z"
+    },
+    {
+      "id": "cm_2",
+      "familyId": "f_1",
+      "conversationId": "c_1",
+      "senderId": "u_3",
+      "type": "text",
+      "content": "我整理了一份家宴菜单，晚点发到动态里，群里先同步下。",
+      "createdAt": "2026-03-05T12:10:00.000Z"
+    }
+  ],
   "media": [],
   "nextIds": {
     "generation": 4,
     "member": 6,
     "moment": 5,
     "notification": 5,
-    "media": 1
+    "media": 1,
+    "conversation": 2,
+    "chatMessage": 3
   }
 }

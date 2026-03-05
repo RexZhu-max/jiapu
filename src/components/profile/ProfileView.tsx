@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Bell, Cloud, Settings, LogOut, ChevronRight, 
@@ -7,6 +7,7 @@ import {
   UserCog, Network, CreditCard, Share2, QrCode,
   MessageCircle
 } from 'lucide-react';
+import { getChatConversations, type SessionUser } from '../../lib/api';
 
 // --- Constants & Types ---
 
@@ -305,30 +306,54 @@ import { FamilyTreeView } from '../family/FamilyTreeView';
 import { FamilySpaceManagementView } from './FamilySpaceManagementView';
 import { NotificationView } from './NotificationView';
 import { SettingsView } from './SettingsView';
+import { ChatView } from './ChatView';
 
 // --- Main Component ---
 
 interface ProfileViewProps {
   token: string;
+  currentUser: SessionUser;
   unreadCount: number;
   onNotificationsChanged?: (count: number) => void;
   onLogout: () => void;
 }
 
-export const ProfileView = ({ token, unreadCount, onNotificationsChanged, onLogout }: ProfileViewProps) => {
+export const ProfileView = ({ token, currentUser, unreadCount, onNotificationsChanged, onLogout }: ProfileViewProps) => {
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [showFamilyTree, setShowFamilyTree] = useState(false);
   const [showSpaceManagement, setShowSpaceManagement] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [chatUnread, setChatUnread] = useState(0);
   
   const user = {
-    name: '林志',
-    role: '家族主理人',
-    avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=100',
+    name: currentUser.name,
+    role: currentUser.role,
+    avatar: currentUser.avatar,
     currentTier: 'free',
     stats: { nodes: 28, maxNodes: 30, storage: 0.3, maxStorage: 0.5 }
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const data = await getChatConversations(token);
+        if (!cancelled) {
+          setChatUnread(data.totalUnread || 0);
+        }
+      } catch {
+        if (!cancelled) {
+          setChatUnread(0);
+        }
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   return (
     <>
@@ -439,6 +464,13 @@ export const ProfileView = ({ token, unreadCount, onNotificationsChanged, onLogo
                badge={unreadCount > 0 ? String(unreadCount) : undefined}
                onClick={() => setShowNotifications(true)}
             />
+            <MenuItem
+               icon={MessageCircle}
+               label="家族消息"
+               badge={chatUnread > 0 ? String(chatUnread) : undefined}
+               value="会话消息 · 实时通信"
+               onClick={() => setShowChat(true)}
+            />
             <MenuItem 
                icon={Cloud} 
                label="数据备份" 
@@ -463,6 +495,14 @@ export const ProfileView = ({ token, unreadCount, onNotificationsChanged, onLogo
            token={token}
            onBack={() => setShowNotifications(false)}
            onUnreadChange={onNotificationsChanged}
+         />
+       )}
+       {showChat && (
+         <ChatView
+           token={token}
+           currentUserId={currentUser.id}
+           onBack={() => setShowChat(false)}
+           onUnreadChange={setChatUnread}
          />
        )}
        {showSettings && <SettingsView onBack={() => setShowSettings(false)} />}

@@ -1,4 +1,4 @@
-import { resolveAssetUrl, withApiBase } from './native/capabilities';
+import { resolveApiBaseUrl, resolveAssetUrl, withApiBase } from './native/capabilities';
 
 export type SessionUser = {
   id: string;
@@ -31,6 +31,40 @@ interface UploadMediaOptions {
   retries?: number;
   compressImage?: boolean;
   signal?: AbortSignal;
+}
+
+export interface ChatParticipant {
+  id: string;
+  name: string;
+  role: string;
+  avatar: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  conversationId: string;
+  sender: ChatParticipant;
+  type: 'text';
+  content: string;
+  createdAt: string;
+}
+
+export interface ChatConversation {
+  id: string;
+  familyId: string;
+  name: string;
+  type: 'group' | 'direct';
+  updatedAt: string;
+  participants: ChatParticipant[];
+  unreadCount: number;
+  lastMessage: ChatMessage | null;
+}
+
+interface ChatSocketHandlers {
+  onConnected?: (payload: any) => void;
+  onMessage?: (event: { conversationId: string; message: ChatMessage }) => void;
+  onConversation?: (event: any) => void;
+  onError?: (event: Event) => void;
 }
 
 const SESSION_KEY = 'heritage.session';
@@ -74,6 +108,56 @@ function normalizeGenerations(generations: any[] = []) {
         }))
       : [],
   }));
+}
+
+function normalizeChatParticipant(participant: any): ChatParticipant {
+  return {
+    id: String(participant?.id || ''),
+    name: String(participant?.name || '未知成员'),
+    role: String(participant?.role || '成员'),
+    avatar: resolveAssetUrl(participant?.avatar || ''),
+  };
+}
+
+function normalizeChatMessage(message: any): ChatMessage {
+  return {
+    id: String(message?.id || ''),
+    conversationId: String(message?.conversationId || ''),
+    sender: normalizeChatParticipant(message?.sender || {}),
+    type: 'text',
+    content: String(message?.content || ''),
+    createdAt: String(message?.createdAt || ''),
+  };
+}
+
+function normalizeChatConversation(conversation: any): ChatConversation {
+  return {
+    id: String(conversation?.id || ''),
+    familyId: String(conversation?.familyId || ''),
+    name: String(conversation?.name || '未命名会话'),
+    type: conversation?.type === 'direct' ? 'direct' : 'group',
+    updatedAt: String(conversation?.updatedAt || ''),
+    participants: Array.isArray(conversation?.participants)
+      ? conversation.participants.map((item: any) => normalizeChatParticipant(item))
+      : [],
+    unreadCount: Number(conversation?.unreadCount || 0),
+    lastMessage: conversation?.lastMessage ? normalizeChatMessage(conversation.lastMessage) : null,
+  };
+}
+
+function resolveWsBaseUrl() {
+  const apiBase = resolveApiBaseUrl();
+  if (!apiBase) return '';
+  return apiBase.replace(/^http/i, 'ws');
+}
+
+function buildChatWsUrl(token: string) {
+  const wsBase = resolveWsBaseUrl();
+  if (wsBase) {
+    return `${wsBase}/ws/chat?token=${encodeURIComponent(token)}`;
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/ws/chat?token=${encodeURIComponent(token)}`;
 }
 
 async function apiFetch<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
@@ -430,4 +514,80 @@ export async function updateMember(token: string, memberId: string, payload: any
 
 export function resolveClientUrl(url: string) {
   return resolveAssetUrl(url || '');
+}
+
+export async function getChatConversations(token: string) {
+  const data = await apiFetch<{ conversations: any[]; totalUnread: number }>('/api/chat/conversations', {}, token);
+  return {
+    conversations: (data.conversations || []).map((item) => normalizeChatConversation(item)),
+    totalUnread: Number(data.totalUnread || 0),
+  };
+}
+
+export async function getChatMessages(token: string, conversationId: string) {
+  const query = new URLSearchParams({ conversationId }).toString();
+  const data = await apiFetch<{ messages: any[] }>(`/api/chat/messages?${query}`, {}, token);
+  return {
+    messages: (data.messages || []).map((item) => normalizeChatMessage(item)),
+  };
+}
+
+export async function sendChatMessage(token: string, conversationId: string, content: string) {
+  const data = await apiFetch<{ message: any }>(
+    '/api/chat/messages',
+    {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, content }),
+    },
+    token,
+  );
+  return {
+    message: normalizeChatMessage(data.message),
+  };
+}
+
+export async function markChatConversationRead(token: string, conversationId: string) {
+  return apiFetch<{ ok: boolean; totalUnread: number }>(
+    `/api/chat/conversations/${conversationId}/read`,
+    { method: 'POST' },
+    token,
+  );
+}
+
+export function connectChatSocket(token: string, handlers: ChatSocketHandlers) {
+  const socket = new WebSocket(buildChatWsUrl(token));
+
+  socket.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(String(event.data || '{}'));
+      if (payload?.type === 'chat:connected') {
+        handlers.onConnected?.(payload?.data || {});
+        return;
+      }
+      if (payload?.type === 'chat:message') {
+        handlers.onMessage?.({
+          conversationId: String(payload?.data?.conversationId || ''),
+          message: normalizeChatMessage(payload?.data?.message || {}),
+        });
+        return;
+      }
+      if (payload?.type === 'chat:conversation') {
+        handlers.onConversation?.(payload?.data || {});
+      }
+    } catch {
+      // ignore malformed socket payload
+    }
+  };
+
+  socket.onerror = (event) => {
+    handlers.onError?.(event);
+  };
+
+  return () => {
+    try {
+      socket.close();
+    } catch {
+      // ignore close errors
+    }
+  };
 }
