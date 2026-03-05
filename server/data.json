@@ -1,0 +1,237 @@
+{
+  "users": [
+    {
+      "id": "u_1",
+      "phone": "13800000000",
+      "password": "123456",
+      "name": "林志",
+      "role": "家族主理人",
+      "avatar": "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=100",
+      "familyId": "f_1"
+    }
+  ],
+  "families": [
+    {
+      "id": "f_1",
+      "name": "林氏家族"
+    }
+  ],
+  "sessions": [
+    {
+      "token": "7029b7ecf1d340a3d8520d331d587ff3cb29acb1",
+      "userId": "u_1",
+      "createdAt": "2026-03-05T12:30:41.954Z"
+    }
+  ],
+  "generations": [
+    {
+      "id": "g_1",
+      "familyId": "f_1",
+      "title": "第一代 · 祖辈",
+      "order": 1,
+      "description": "祖辈"
+    },
+    {
+      "id": "g_2",
+      "familyId": "f_1",
+      "title": "第二代 · 父辈",
+      "order": 2,
+      "description": "父辈"
+    },
+    {
+      "id": "g_3",
+      "familyId": "f_1",
+      "title": "第三代 · 吾辈",
+      "order": 3,
+      "description": "吾辈"
+    }
+  ],
+  "members": [
+    {
+      "id": "m_1",
+      "familyId": "f_1",
+      "generationId": "g_1",
+      "name": "林国强",
+      "role": "祖父",
+      "birth": "1932",
+      "bio": "曾任县中学校长，喜好书法。",
+      "img": "https://images.unsplash.com/photo-1729559149720-2b6c5c200428?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
+      "memories": 12,
+      "gender": "male"
+    },
+    {
+      "id": "m_2",
+      "familyId": "f_1",
+      "generationId": "g_1",
+      "name": "王秀英",
+      "role": "祖母",
+      "birth": "1935",
+      "bio": "勤劳善良，年轻时是纺织厂先进工作者。",
+      "img": "https://images.unsplash.com/photo-1609275467033-fd15df419bd4?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
+      "memories": 8,
+      "gender": "female"
+    },
+    {
+      "id": "m_3",
+      "familyId": "f_1",
+      "generationId": "g_2",
+      "name": "林建国",
+      "role": "父亲",
+      "birth": "1960",
+      "bio": "工程师，爱好无线电。",
+      "img": "https://images.unsplash.com/photo-1697144532799-c94b0344c1cb?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
+      "memories": 24,
+      "gender": "male"
+    },
+    {
+      "id": "m_4",
+      "familyId": "f_1",
+      "generationId": "g_2",
+      "name": "李梅",
+      "role": "母亲",
+      "birth": "1962",
+      "bio": "中学语文老师，温柔耐心。",
+      "img": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=100",
+      "memories": 18,
+      "gender": "female"
+    },
+    {
+      "id": "m_5",
+      "familyId": "f_1",
+      "generationId": "g_3",
+      "name": "林志",
+      "role": "我",
+      "birth": "1990",
+      "bio": "记录者，希望把家族故事留下来。",
+      "img": "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=100",
+      "memories": 42,
+      "gender": "male"
+    }
+  ],
+  "moments": [
+    {
+      "id": "mo_1",
+      "familyId": "f_1",
+      "userId": "u_1",
+      "memoryDate": "2025年 · 春节",
+      "content": "今年年夜饭人很齐，我把老照片整理上传了。",
+      "images": [
+        "https://images.unsplash.com/photo-1765582870011-ff3cfdb06700?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080"
+      ],
+      "audio": null,
+      "participants": [
+        "@奶奶",
+        "@大伯"
+      ],
+      "location": "上海",
+      "createdAt": "2026-03-05T08:00:00.000Z"
+    },
+    {
+      "id": "mo_2",
+      "familyId": "f_1",
+      "userId": "u_1",
+      "memoryDate": "2024年 · 清明前夕",
+      "content": "今年清明祭祖建议统一包车前往。",
+      "images": [],
+      "audio": {
+        "url": "",
+        "duration": "00:48"
+      },
+      "participants": [
+        "@全员"
+      ],
+      "location": "苏州",
+      "createdAt": "2026-03-04T09:00:00.000Z"
+    },
+    {
+      "id": "mo_3",
+      "familyId": "f_1",
+      "userId": "u_1",
+      "memoryDate": "今天",
+      "content": "SSE冒烟测试",
+      "images": [],
+      "audio": null,
+      "participants": [],
+      "location": "",
+      "createdAt": "2026-03-05T09:43:54.791Z"
+    },
+    {
+      "id": "mo_4",
+      "familyId": "f_1",
+      "userId": "u_1",
+      "memoryDate": "今天",
+      "content": "局部更新测试",
+      "images": [],
+      "audio": null,
+      "participants": [],
+      "location": "",
+      "createdAt": "2026-03-05T12:30:43.024Z"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "n_4",
+      "familyId": "f_1",
+      "type": "memory",
+      "avatar": "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=100",
+      "sender": "林志",
+      "action": "发布了新动态",
+      "target": "今天",
+      "time": "刚刚",
+      "isRead": true,
+      "preview": "局部更新测试",
+      "image": "",
+      "createdAt": "2026-03-05T12:30:43.024Z"
+    },
+    {
+      "id": "n_3",
+      "familyId": "f_1",
+      "type": "memory",
+      "avatar": "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=100",
+      "sender": "林志",
+      "action": "发布了新动态",
+      "target": "今天",
+      "time": "刚刚",
+      "isRead": false,
+      "preview": "SSE冒烟测试",
+      "image": "",
+      "createdAt": "2026-03-05T09:43:54.791Z"
+    },
+    {
+      "id": "n_1",
+      "familyId": "f_1",
+      "type": "memory",
+      "avatar": "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=100",
+      "sender": "林志",
+      "action": "发布了新动态",
+      "target": "今年年夜饭",
+      "time": "2小时前",
+      "isRead": false,
+      "preview": "今年年夜饭人很齐，我把老照片整理上传了。",
+      "image": "https://images.unsplash.com/photo-1765582870011-ff3cfdb06700?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
+      "createdAt": "2026-03-05T08:10:00.000Z"
+    },
+    {
+      "id": "n_2",
+      "familyId": "f_1",
+      "type": "comment",
+      "avatar": "https://images.unsplash.com/photo-1697144532799-c94b0344c1cb?auto=format&fit=crop&q=80&w=100",
+      "sender": "林建国",
+      "action": "评论了",
+      "target": "你的动态",
+      "time": "昨天",
+      "isRead": false,
+      "preview": "照片很珍贵，记得备注拍摄时间。",
+      "image": "",
+      "createdAt": "2026-03-04T06:10:00.000Z"
+    }
+  ],
+  "media": [],
+  "nextIds": {
+    "generation": 4,
+    "member": 6,
+    "moment": 5,
+    "notification": 5,
+    "media": 1
+  }
+}
