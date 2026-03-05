@@ -558,6 +558,9 @@ async function handleApi(req, res, pathname, url) {
     if (!user) return;
 
     const conversationId = url.searchParams.get('conversationId') || '';
+    const after = url.searchParams.get('after') || '';
+    const limitRaw = Number(url.searchParams.get('limit') || 0);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 200;
     if (!conversationId) {
       sendJson(res, 400, { message: '缺少会话 ID' });
       return;
@@ -580,12 +583,19 @@ async function handleApi(req, res, pathname, url) {
       return;
     }
 
-    const messages = db.chatMessages
+    const afterTs = after ? new Date(after).getTime() : 0;
+    const baseList = db.chatMessages
       .filter((item) => item.conversationId === conversationId)
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-      .map((item) => buildChatMessage(db, item));
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-    sendJson(res, 200, { messages });
+    const filtered = afterTs > 0
+      ? baseList.filter((item) => new Date(item.createdAt).getTime() > afterTs)
+      : baseList;
+    const sliced = filtered.slice(-limit);
+    const messages = sliced.map((item) => buildChatMessage(db, item));
+    const cursor = sliced.length > 0 ? sliced[sliced.length - 1].createdAt : '';
+
+    sendJson(res, 200, { messages, cursor });
     return;
   }
 

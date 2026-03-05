@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { ChevronRight, MessageCircle, Send, Loader2, Users } from 'lucide-react';
 import {
@@ -9,6 +9,7 @@ import {
   sendChatMessage,
   type ChatConversation,
   type ChatMessage,
+  type ChatSocketLifecycle,
 } from '../../lib/api';
 import { StatusNotice } from '../common/StatusNotice';
 import { trackEvent } from '../../lib/telemetry';
@@ -38,6 +39,19 @@ function formatConversationTime(iso: string) {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
+function messageTimeValue(iso: string) {
+  const value = new Date(iso).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
+function mergeMessages(prev: ChatMessage[], incoming: ChatMessage[]) {
+  if (incoming.length === 0) return prev;
+  const map = new Map<string, ChatMessage>();
+  prev.forEach((item) => map.set(item.id, item));
+  incoming.forEach((item) => map.set(item.id, item));
+  return Array.from(map.values()).sort((a, b) => messageTimeValue(a.createdAt) - messageTimeValue(b.createdAt));
+}
+
 export const ChatView = ({ token, currentUserId, onBack, onUnreadChange }: ChatViewProps) => {
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState('');
@@ -47,51 +61,53 @@ export const ChatView = ({ token, currentUserId, onBack, onUnreadChange }: ChatV
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  const [socketStatus, setSocketStatus] = useState<ChatSocketLifecycle>('connecting');
+
+  const selectedConversationRef = useRef('');
+  const cursorByConversationRef = useRef<Record<string, string>>({});
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) || null,
     [conversations, selectedConversationId],
   );
 
-  const refreshConversations = useCallback(async () => {
-    try {
-      const data = await getChatConversations(token);
-      setConversations(data.conversations || []);
-      onUnreadChange?.(data.totalUnread || 0);
-
-      if (!selectedConversationId && data.conversations.length > 0) {
-        setSelectedConversationId(data.conversations[0].id);
-      } else if (
-        selectedConversationId &&
-        data.conversations.length > 0 &&
-        !data.conversations.some((item) => item.id === selectedConversationId)
-      ) {
-        setSelectedConversationId(data.conversations[0].id);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '会话列表加载失败');
-    } finally {
-      setLoadingConversations(false);
+  const updateCursor = useCallback((conversationId: string, nextCursor: string) => {
+    if (!conversationId || !nextCursor) return;
+    const currentCursor = cursorByConversationRef.current[conversationId] || '';
+    if (!currentCursor || messageTimeValue(nextCursor) >= messageTimeValue(currentCursor)) {
+      cursorByConversationRef.current[conversationId] = nextCursor;
     }
-  }, [onUnreadChange, selectedConversationId, token]);
+  }, []);
 
-  const refreshMessages = useCallback(
-    async (conversationId: string) => {
-      if (!conversationId) {
-        setMessages([]);
-        return;
+  const refreshConversations = useCallback(
+    async (silent = false) => {
+      if (!silent) {
+        setLoadingConversations(true);
       }
-      setLoadingMessages(true);
       try {
-        const data = await getChatMessages(token, conversationId);
-        setMessages(data.messages || []);
+        const data = await getChatConversations(token);
+        const nextConversations = data.conversations || [];
+        setConversations(nextConversations);
+        onUnreadChange?.(data.totalUnread || 0);
+
+        if (!selectedConversationRef.current && nextConversations.length > 0) {
+          setSelectedConversationId(nextConversations[0].id);
+        } else if (
+          selectedConversationRef.current &&
+          nextConversations.length > 0 &&
+          !nextConversations.some((item) => item.id === selectedConversationRef.current)
+        ) {
+          setSelectedConversationId(nextConversations[0].id);
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : '消息加载失败');
+        setError(err instanceof Error ? err.message : '会话列表加载失败');
       } finally {
-        setLoadingMessages(false);
+        if (!silent) {
+          setLoadingConversations(false);
+        }
       }
     },
-    [token],
+    [onUnreadChange, token],
   );
 
   const markRead = useCallback(
@@ -102,12 +118,61 @@ export const ChatView = ({ token, currentUserId, onBack, onUnreadChange }: ChatV
         if (typeof data?.totalUnread === 'number') {
           onUnreadChange?.(data.totalUnread);
         }
+        setConversations((prev) => prev.map((item) => (item.id === conversationId ? { ...item, unreadCount: 0 } : item)));
       } catch {
         // 忽略已读失败，避免打断阅读体验
       }
     },
     [onUnreadChange, token],
   );
+
+  const refreshMessages = useCallback(
+    async (conversationId: string, mode: 'full' | 'delta' = 'full') => {
+      if (!conversationId) {
+        setMessages([]);
+        return;
+      }
+
+      if (mode === 'full') {
+        setLoadingMessages(true);
+      }
+
+      try {
+        const query = mode === 'delta'
+          ? { after: cursorByConversationRef.current[conversationId] || '', limit: 200 }
+          : { limit: 200 };
+        const data = await getChatMessages(token, conversationId, query);
+
+        if (selectedConversationRef.current !== conversationId) {
+          return;
+        }
+
+        if (mode === 'full') {
+          setMessages(data.messages || []);
+        } else if ((data.messages || []).length > 0) {
+          setMessages((prev) => mergeMessages(prev, data.messages || []));
+        }
+
+        if (data.cursor) {
+          updateCursor(conversationId, data.cursor);
+        } else {
+          const latest = (data.messages || []).slice(-1)[0]?.createdAt || '';
+          updateCursor(conversationId, latest);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '消息加载失败');
+      } finally {
+        if (mode === 'full') {
+          setLoadingMessages(false);
+        }
+      }
+    },
+    [token, updateCursor],
+  );
+
+  useEffect(() => {
+    selectedConversationRef.current = selectedConversationId;
+  }, [selectedConversationId]);
 
   useEffect(() => {
     setLoadingConversations(true);
@@ -120,34 +185,45 @@ export const ChatView = ({ token, currentUserId, onBack, onUnreadChange }: ChatV
       setMessages([]);
       return;
     }
-    refreshMessages(selectedConversationId);
+    refreshMessages(selectedConversationId, 'full');
     markRead(selectedConversationId);
   }, [markRead, refreshMessages, selectedConversationId]);
 
   useEffect(() => {
     const close = connectChatSocket(token, {
-      onMessage: async (event) => {
-        setMessages((prev) => {
-          if (event.conversationId !== selectedConversationId) return prev;
-          if (prev.some((item) => item.id === event.message.id)) return prev;
-          return [...prev, event.message];
-        });
-
-        if (event.conversationId === selectedConversationId && event.message.sender.id !== currentUserId) {
-          await markRead(event.conversationId);
+      onStatusChange: (status) => {
+        setSocketStatus(status);
+      },
+      onConnected: () => {
+        setError('');
+      },
+      onReconnected: () => {
+        const activeId = selectedConversationRef.current;
+        if (activeId) {
+          refreshMessages(activeId, 'delta');
         }
-        refreshConversations();
+        refreshConversations(true);
+      },
+      onMessage: async (event) => {
+        updateCursor(event.conversationId, event.message.createdAt);
+        if (event.conversationId === selectedConversationRef.current) {
+          setMessages((prev) => mergeMessages(prev, [event.message]));
+          if (event.message.sender.id !== currentUserId) {
+            await markRead(event.conversationId);
+          }
+        }
+        refreshConversations(true);
       },
       onConversation: () => {
-        refreshConversations();
+        refreshConversations(true);
       },
       onError: () => {
-        setError('消息通道连接异常，正在自动恢复');
+        setError('消息通道连接异常，正在重连并补拉消息');
       },
     });
 
     return close;
-  }, [currentUserId, markRead, refreshConversations, selectedConversationId, token]);
+  }, [currentUserId, markRead, refreshConversations, refreshMessages, token, updateCursor]);
 
   const handleSend = async () => {
     const content = draft.trim();
@@ -158,12 +234,10 @@ export const ChatView = ({ token, currentUserId, onBack, onUnreadChange }: ChatV
     try {
       const data = await sendChatMessage(token, selectedConversationId, content);
       setDraft('');
-      setMessages((prev) => {
-        if (prev.some((item) => item.id === data.message.id)) return prev;
-        return [...prev, data.message];
-      });
+      setMessages((prev) => mergeMessages(prev, [data.message]));
+      updateCursor(selectedConversationId, data.message.createdAt);
       trackEvent('chat.message.send', { conversationId: selectedConversationId });
-      refreshConversations();
+      refreshConversations(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : '发送失败');
       trackEvent('chat.message.send.failed');
@@ -189,6 +263,12 @@ export const ChatView = ({ token, currentUserId, onBack, onUnreadChange }: ChatV
           <div className="w-8" />
         </div>
       </div>
+
+      {socketStatus === 'reconnecting' ? (
+        <div className="px-6 pt-2">
+          <StatusNotice kind="info" text="网络波动，正在重连并补拉消息..." />
+        </div>
+      ) : null}
 
       {error ? (
         <div className="px-6 pt-2">

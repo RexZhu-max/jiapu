@@ -61,10 +61,19 @@ export interface ChatConversation {
 }
 
 interface ChatSocketHandlers {
+  onStatusChange?: (status: ChatSocketLifecycle) => void;
   onConnected?: (payload: any) => void;
+  onReconnected?: () => void;
   onMessage?: (event: { conversationId: string; message: ChatMessage }) => void;
   onConversation?: (event: any) => void;
   onError?: (event: Event) => void;
+}
+
+export type ChatSocketLifecycle = 'connecting' | 'connected' | 'reconnecting' | 'closed';
+
+interface ChatMessagesQueryOptions {
+  after?: string;
+  limit?: number;
 }
 
 const SESSION_KEY = 'heritage.session';
@@ -524,11 +533,19 @@ export async function getChatConversations(token: string) {
   };
 }
 
-export async function getChatMessages(token: string, conversationId: string) {
-  const query = new URLSearchParams({ conversationId }).toString();
-  const data = await apiFetch<{ messages: any[] }>(`/api/chat/messages?${query}`, {}, token);
+export async function getChatMessages(token: string, conversationId: string, options: ChatMessagesQueryOptions = {}) {
+  const queryBuilder = new URLSearchParams({ conversationId });
+  if (options.after) {
+    queryBuilder.set('after', options.after);
+  }
+  if (typeof options.limit === 'number') {
+    queryBuilder.set('limit', String(options.limit));
+  }
+
+  const data = await apiFetch<{ messages: any[]; cursor?: string }>(`/api/chat/messages?${queryBuilder.toString()}`, {}, token);
   return {
     messages: (data.messages || []).map((item) => normalizeChatMessage(item)),
+    cursor: String(data.cursor || ''),
   };
 }
 
@@ -555,37 +572,106 @@ export async function markChatConversationRead(token: string, conversationId: st
 }
 
 export function connectChatSocket(token: string, handlers: ChatSocketHandlers) {
-  const socket = new WebSocket(buildChatWsUrl(token));
+  let socket: WebSocket | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let manuallyClosed = false;
+  let reconnectAttempt = 0;
+  let everConnected = false;
 
-  socket.onmessage = (event) => {
-    try {
-      const payload = JSON.parse(String(event.data || '{}'));
-      if (payload?.type === 'chat:connected') {
-        handlers.onConnected?.(payload?.data || {});
-        return;
-      }
-      if (payload?.type === 'chat:message') {
-        handlers.onMessage?.({
-          conversationId: String(payload?.data?.conversationId || ''),
-          message: normalizeChatMessage(payload?.data?.message || {}),
-        });
-        return;
-      }
-      if (payload?.type === 'chat:conversation') {
-        handlers.onConversation?.(payload?.data || {});
-      }
-    } catch {
-      // ignore malformed socket payload
+  const clearHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
     }
   };
 
-  socket.onerror = (event) => {
-    handlers.onError?.(event);
+  const clearReconnect = () => {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
   };
 
+  const scheduleReconnect = () => {
+    if (manuallyClosed) return;
+    clearReconnect();
+    reconnectAttempt += 1;
+    const waitMs = Math.min(8000, 500 * 2 ** Math.min(reconnectAttempt, 4));
+    handlers.onStatusChange?.('reconnecting');
+    reconnectTimer = setTimeout(() => {
+      createSocket();
+    }, waitMs);
+  };
+
+  const createSocket = () => {
+    if (manuallyClosed) return;
+    clearReconnect();
+    handlers.onStatusChange?.(reconnectAttempt > 0 ? 'reconnecting' : 'connecting');
+    socket = new WebSocket(buildChatWsUrl(token));
+
+    socket.onopen = () => {
+      const isReconnect = everConnected;
+      everConnected = true;
+      reconnectAttempt = 0;
+      handlers.onStatusChange?.('connected');
+
+      clearHeartbeat();
+      heartbeatTimer = setInterval(() => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ type: 'chat:ping', data: { ts: Date.now() } }));
+      }, 20000);
+
+      if (isReconnect) {
+        handlers.onReconnected?.();
+      }
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(String(event.data || '{}'));
+        if (payload?.type === 'chat:connected') {
+          handlers.onConnected?.(payload?.data || {});
+          return;
+        }
+        if (payload?.type === 'chat:message') {
+          handlers.onMessage?.({
+            conversationId: String(payload?.data?.conversationId || ''),
+            message: normalizeChatMessage(payload?.data?.message || {}),
+          });
+          return;
+        }
+        if (payload?.type === 'chat:conversation') {
+          handlers.onConversation?.(payload?.data || {});
+        }
+      } catch {
+        // ignore malformed socket payload
+      }
+    };
+
+    socket.onerror = (event) => {
+      handlers.onError?.(event);
+    };
+
+    socket.onclose = () => {
+      clearHeartbeat();
+      if (manuallyClosed) {
+        handlers.onStatusChange?.('closed');
+        return;
+      }
+      scheduleReconnect();
+    };
+  };
+
+  createSocket();
+
   return () => {
+    manuallyClosed = true;
+    clearReconnect();
+    clearHeartbeat();
+    handlers.onStatusChange?.('closed');
     try {
-      socket.close();
+      socket?.close();
     } catch {
       // ignore close errors
     }
