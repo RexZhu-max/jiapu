@@ -6,7 +6,7 @@ export type AdminUser = {
   id: string;
   username: string;
   name: string;
-  role: string;
+  role: 'super_admin' | 'operator' | 'reviewer';
 };
 
 export type AdminSession = {
@@ -118,10 +118,10 @@ export async function getAdminNotices(token: string) {
   return adminFetch<{ notices: any[] }>('/api/admin/notices', {}, token);
 }
 
-export async function createAdminNotice(token: string, title: string, content: string) {
+export async function createAdminNotice(token: string, title: string, content: string, publishAt?: string) {
   return adminFetch<{ notice: any }>('/api/admin/notices', {
     method: 'POST',
-    body: JSON.stringify({ title, content }),
+    body: JSON.stringify({ title, content, publishAt: publishAt || '' }),
   }, token);
 }
 

@@ -115,6 +115,41 @@ function computeUnreadCount(db, familyId) {
   return db.notifications.filter((item) => item.familyId === familyId && !item.isRead).length;
 }
 
+const ADMIN_ROLE_PERMISSIONS = {
+  super_admin: [
+    'admin.overview',
+    'admin.users.read',
+    'admin.users.manage',
+    'admin.families.read',
+    'admin.moments.read',
+    'admin.moments.review',
+    'admin.notices.read',
+    'admin.notices.manage',
+    'admin.logs.read'
+  ],
+  operator: [
+    'admin.overview',
+    'admin.users.read',
+    'admin.families.read',
+    'admin.moments.read',
+    'admin.notices.read',
+    'admin.notices.manage'
+  ],
+  reviewer: [
+    'admin.overview',
+    'admin.families.read',
+    'admin.moments.read',
+    'admin.moments.review',
+    'admin.notices.read'
+  ]
+};
+
+const BUILTIN_ADMIN_USERS = [
+  { id: 'a_1', username: 'admin', password: 'admin123', name: '系统管理员', role: 'super_admin' },
+  { id: 'a_2', username: 'operator', password: 'operator123', name: '运营管理员', role: 'operator' },
+  { id: 'a_3', username: 'reviewer', password: 'reviewer123', name: '审核管理员', role: 'reviewer' }
+];
+
 function ensureAdminData(db) {
   let changed = false;
 
@@ -147,15 +182,17 @@ function ensureAdminData(db) {
     changed = true;
   }
 
-  if (db.adminUsers.length === 0) {
-    db.adminUsers.push({
-      id: 'a_1',
-      username: 'admin',
-      password: 'admin123',
-      name: '系统管理员',
-      role: 'super_admin'
-    });
-    changed = true;
+  for (const builtin of BUILTIN_ADMIN_USERS) {
+    const existing = db.adminUsers.find((item) => item.username === builtin.username);
+    if (!existing) {
+      db.adminUsers.push({ ...builtin });
+      changed = true;
+      continue;
+    }
+    if (!existing.role) {
+      existing.role = builtin.role;
+      changed = true;
+    }
   }
 
   if (Array.isArray(db.users)) {
@@ -183,6 +220,23 @@ function ensureAdminData(db) {
       }
       if (typeof moment.reviewedBy !== 'string') {
         moment.reviewedBy = '';
+        changed = true;
+      }
+    }
+  }
+
+  if (Array.isArray(db.notices)) {
+    for (const notice of db.notices) {
+      if (!notice.status) {
+        notice.status = 'published';
+        changed = true;
+      }
+      if (typeof notice.publishAt !== 'string') {
+        notice.publishAt = notice.createdAt || '';
+        changed = true;
+      }
+      if (typeof notice.publishedAt !== 'string') {
+        notice.publishedAt = notice.status === 'published' ? (notice.publishAt || notice.createdAt || '') : '';
         changed = true;
       }
     }
@@ -455,6 +509,20 @@ function requireAdminAuth(req, res, db) {
   return admin;
 }
 
+function hasAdminPermission(admin, permission) {
+  const role = admin?.role || 'reviewer';
+  const permissions = ADMIN_ROLE_PERMISSIONS[role] || [];
+  return permissions.includes(permission);
+}
+
+function requireAdminPermission(req, res, admin, permission) {
+  if (hasAdminPermission(admin, permission)) {
+    return true;
+  }
+  sendJson(res, 403, { message: '当前角色无该操作权限' });
+  return false;
+}
+
 function pushAdminLog(db, adminId, action, targetType, targetId, detail = '') {
   db.adminLogs.unshift({
     id: nextId(db, 'adminLog', 'al'),
@@ -468,6 +536,51 @@ function pushAdminLog(db, adminId, action, targetType, targetId, detail = '') {
   if (db.adminLogs.length > 500) {
     db.adminLogs = db.adminLogs.slice(0, 500);
   }
+}
+
+function broadcastSystemNotice(db, notice) {
+  const now = new Date().toISOString();
+  for (const family of db.families) {
+    const created = {
+      id: nextId(db, 'notification', 'n'),
+      familyId: family.id,
+      type: 'system',
+      avatar: '',
+      sender: '系统公告',
+      action: notice.title,
+      target: '',
+      time: '刚刚',
+      isRead: false,
+      preview: String(notice.content || '').slice(0, 80),
+      image: '',
+      createdAt: now
+    };
+    db.notifications.unshift(created);
+    broadcastFamilyEvent(family.id, 'notification-updated', {
+      action: 'create',
+      notification: buildNotificationView(created),
+      unreadCount: computeUnreadCount(db, family.id)
+    });
+  }
+}
+
+function publishDueNotices(db) {
+  if (!Array.isArray(db.notices) || db.notices.length === 0) {
+    return false;
+  }
+  let changed = false;
+  const nowTs = Date.now();
+  for (const notice of db.notices) {
+    if (notice.status !== 'scheduled') continue;
+    const publishAtTs = new Date(notice.publishAt || '').getTime();
+    if (!Number.isFinite(publishAtTs)) continue;
+    if (publishAtTs > nowTs) continue;
+    notice.status = 'published';
+    notice.publishedAt = new Date().toISOString();
+    broadcastSystemNotice(db, notice);
+    changed = true;
+  }
+  return changed;
 }
 
 function formatRelativeTime(iso) {
@@ -605,7 +718,8 @@ async function handleSSEStream(req, res, url) {
 async function handleApi(req, res, pathname, url) {
   const db = await loadDB();
   const adminDataChanged = ensureAdminData(db);
-  if (adminDataChanged) {
+  const noticePublished = publishDueNotices(db);
+  if (adminDataChanged || noticePublished) {
     await saveDB(db);
   }
 
@@ -637,6 +751,7 @@ async function handleApi(req, res, pathname, url) {
   if (req.method === 'GET' && pathname === '/api/admin/overview') {
     const admin = requireAdminAuth(req, res, db);
     if (!admin) return;
+    if (!requireAdminPermission(req, res, admin, 'admin.overview')) return;
     const pendingMoments = db.moments.filter((item) => item.moderationStatus === 'pending').length;
     const rejectedMoments = db.moments.filter((item) => item.moderationStatus === 'rejected').length;
     const bannedUsers = db.users.filter((item) => item.isBanned).length;
@@ -661,6 +776,7 @@ async function handleApi(req, res, pathname, url) {
   if (req.method === 'GET' && pathname === '/api/admin/users') {
     const admin = requireAdminAuth(req, res, db);
     if (!admin) return;
+    if (!requireAdminPermission(req, res, admin, 'admin.users.read')) return;
     const list = db.users.map((user) => {
       const family = db.families.find((item) => item.id === user.familyId);
       const posts = db.moments.filter((item) => item.userId === user.id).length;
@@ -683,6 +799,7 @@ async function handleApi(req, res, pathname, url) {
   if (req.method === 'POST' && pathname.startsWith('/api/admin/users/') && pathname.endsWith('/status')) {
     const admin = requireAdminAuth(req, res, db);
     if (!admin) return;
+    if (!requireAdminPermission(req, res, admin, 'admin.users.manage')) return;
     const userId = pathname.split('/')[4];
     const body = await readBody(req);
     const nextBanned = Boolean(body.isBanned);
@@ -711,6 +828,7 @@ async function handleApi(req, res, pathname, url) {
   if (req.method === 'GET' && pathname === '/api/admin/families') {
     const admin = requireAdminAuth(req, res, db);
     if (!admin) return;
+    if (!requireAdminPermission(req, res, admin, 'admin.families.read')) return;
     const families = db.families.map((family) => {
       const users = db.users.filter((item) => item.familyId === family.id);
       const members = db.members.filter((item) => item.familyId === family.id);
@@ -732,6 +850,7 @@ async function handleApi(req, res, pathname, url) {
   if (req.method === 'GET' && pathname === '/api/admin/moments') {
     const admin = requireAdminAuth(req, res, db);
     if (!admin) return;
+    if (!requireAdminPermission(req, res, admin, 'admin.moments.read')) return;
     const status = String(url.searchParams.get('status') || 'all');
     const familyId = String(url.searchParams.get('familyId') || '');
     const list = db.moments
@@ -766,6 +885,7 @@ async function handleApi(req, res, pathname, url) {
   if (req.method === 'POST' && pathname.startsWith('/api/admin/moments/') && pathname.endsWith('/review')) {
     const admin = requireAdminAuth(req, res, db);
     if (!admin) return;
+    if (!requireAdminPermission(req, res, admin, 'admin.moments.review')) return;
     const momentId = pathname.split('/')[4];
     const body = await readBody(req);
     const status = String(body.status || '');
@@ -817,6 +937,7 @@ async function handleApi(req, res, pathname, url) {
   if (req.method === 'GET' && pathname === '/api/admin/notices') {
     const admin = requireAdminAuth(req, res, db);
     if (!admin) return;
+    if (!requireAdminPermission(req, res, admin, 'admin.notices.read')) return;
     const notices = db.notices
       .slice()
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -827,46 +948,45 @@ async function handleApi(req, res, pathname, url) {
   if (req.method === 'POST' && pathname === '/api/admin/notices') {
     const admin = requireAdminAuth(req, res, db);
     if (!admin) return;
+    if (!requireAdminPermission(req, res, admin, 'admin.notices.manage')) return;
     const body = await readBody(req);
     const title = String(body.title || '').trim();
     const content = String(body.content || '').trim();
+    const publishAt = String(body.publishAt || '').trim();
     if (!title || !content) {
       sendJson(res, 400, { message: '公告标题和内容不能为空' });
       return;
     }
+    let normalizedPublishAt = '';
+    if (publishAt) {
+      const value = new Date(publishAt);
+      if (Number.isNaN(value.getTime())) {
+        sendJson(res, 400, { message: '定时发布时间格式无效' });
+        return;
+      }
+      normalizedPublishAt = value.toISOString();
+    } else {
+      normalizedPublishAt = new Date().toISOString();
+    }
+
+    const isScheduled = new Date(normalizedPublishAt).getTime() > Date.now();
     const notice = {
       id: nextId(db, 'notice', 'nt'),
       title,
       content,
       createdBy: admin.name,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      publishAt: normalizedPublishAt,
+      publishedAt: isScheduled ? '' : normalizedPublishAt,
+      status: isScheduled ? 'scheduled' : 'published'
     };
     db.notices.unshift(notice);
 
-    for (const family of db.families) {
-      const created = {
-        id: nextId(db, 'notification', 'n'),
-        familyId: family.id,
-        type: 'system',
-        avatar: '',
-        sender: '系统公告',
-        action: title,
-        target: '',
-        time: '刚刚',
-        isRead: false,
-        preview: content.slice(0, 80),
-        image: '',
-        createdAt: new Date().toISOString()
-      };
-      db.notifications.unshift(created);
-      broadcastFamilyEvent(family.id, 'notification-updated', {
-        action: 'create',
-        notification: buildNotificationView(created),
-        unreadCount: computeUnreadCount(db, family.id)
-      });
+    if (!isScheduled) {
+      broadcastSystemNotice(db, notice);
     }
 
-    pushAdminLog(db, admin.id, 'notice.create', 'notice', notice.id, title);
+    pushAdminLog(db, admin.id, isScheduled ? 'notice.schedule' : 'notice.publish', 'notice', notice.id, title);
     await saveDB(db);
     sendJson(res, 201, { notice });
     return;
@@ -875,6 +995,7 @@ async function handleApi(req, res, pathname, url) {
   if (req.method === 'GET' && pathname === '/api/admin/logs') {
     const admin = requireAdminAuth(req, res, db);
     if (!admin) return;
+    if (!requireAdminPermission(req, res, admin, 'admin.logs.read')) return;
     const logs = db.adminLogs.slice(0, 200).map((item) => {
       const operator = db.adminUsers.find((u) => u.id === item.adminId);
       return {

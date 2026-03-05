@@ -48,8 +48,9 @@ npm run dev
 
 管理员后台：
 - 地址：`http://localhost:3000/admin`
-- 账号：`admin`
-- 密码：`admin123`
+- 超管：`admin / admin123`
+- 运营：`operator / operator123`
+- 审核：`reviewer / reviewer123`
 
 ## 3. App 壳运行（Capacitor）
 
@@ -109,3 +110,15 @@ npm run cap:sync            # 同步配置与插件
 npm run cap:open:ios        # 打开 iOS 工程
 npm run cap:open:android    # 打开 Android 工程
 ```
+
+## 7. 后台管理能力说明（MVP+）
+
+- 角色权限：
+  - `super_admin`：全部权限（含用户封禁、日志查看）
+  - `operator`：运营权限（公告发布、用户只读、审核只读）
+  - `reviewer`：审核权限（动态审核、公告只读）
+- 动态审核：
+  - 支持“审核备注模板”与自定义备注
+- 公告发布：
+  - 支持“立即发布”与“定时发布”
+  - 定时公告到点后自动转为已发布并广播通知
