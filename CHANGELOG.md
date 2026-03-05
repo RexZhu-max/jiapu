@@ -26,6 +26,13 @@
   - 后端 WebSocket 通道（`/ws/chat`）用于消息实时推送
   - 前端消息页（`ChatView`）支持会话列表、消息收发、未读更新
   - 消息弱网补强：断线自动重连、离线消息增量补拉
+- 新增后台管理系统 MVP（`/admin`）：
+  - 管理员登录
+  - 数据总览（用户、家族、动态、通知）
+  - 用户封禁/解封
+  - 动态审核（通过/拒绝）
+  - 系统公告发布
+  - 审计日志查询
 
 ### Changed
 - API 层支持壳内访问后端：
@@ -40,6 +47,15 @@
 - Vite 新增 `/ws` 代理，支持本地 Web 环境下消息实时连接。
 - `README` 增加 Web+壳完整启动说明、消息能力说明与测试账号信息。
 - 聊天消息接口支持 `after` 增量拉取参数，用于重连后补齐漏消息。
+- 后端新增管理员接口：
+  - `/api/admin/auth/login`
+  - `/api/admin/overview`
+  - `/api/admin/users`
+  - `/api/admin/families`
+  - `/api/admin/moments`
+  - `/api/admin/notices`
+  - `/api/admin/logs`
+- 用户鉴权增加封禁态拦截（封禁用户不可登录业务端）。
 
 ### Planned
 - 上传任务单文件重试与失败项继续处理

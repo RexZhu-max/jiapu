@@ -115,6 +115,82 @@ function computeUnreadCount(db, familyId) {
   return db.notifications.filter((item) => item.familyId === familyId && !item.isRead).length;
 }
 
+function ensureAdminData(db) {
+  let changed = false;
+
+  if (!Array.isArray(db.adminUsers)) {
+    db.adminUsers = [];
+    changed = true;
+  }
+  if (!Array.isArray(db.adminSessions)) {
+    db.adminSessions = [];
+    changed = true;
+  }
+  if (!Array.isArray(db.adminLogs)) {
+    db.adminLogs = [];
+    changed = true;
+  }
+  if (!Array.isArray(db.notices)) {
+    db.notices = [];
+    changed = true;
+  }
+  if (!db.nextIds) {
+    db.nextIds = {};
+    changed = true;
+  }
+  if (!db.nextIds.notice) {
+    db.nextIds.notice = 1;
+    changed = true;
+  }
+  if (!db.nextIds.adminLog) {
+    db.nextIds.adminLog = 1;
+    changed = true;
+  }
+
+  if (db.adminUsers.length === 0) {
+    db.adminUsers.push({
+      id: 'a_1',
+      username: 'admin',
+      password: 'admin123',
+      name: '系统管理员',
+      role: 'super_admin'
+    });
+    changed = true;
+  }
+
+  if (Array.isArray(db.users)) {
+    for (const user of db.users) {
+      if (typeof user.isBanned !== 'boolean') {
+        user.isBanned = false;
+        changed = true;
+      }
+    }
+  }
+
+  if (Array.isArray(db.moments)) {
+    for (const moment of db.moments) {
+      if (!moment.moderationStatus) {
+        moment.moderationStatus = 'approved';
+        changed = true;
+      }
+      if (typeof moment.reviewRemark !== 'string') {
+        moment.reviewRemark = '';
+        changed = true;
+      }
+      if (typeof moment.reviewedAt !== 'string') {
+        moment.reviewedAt = '';
+        changed = true;
+      }
+      if (typeof moment.reviewedBy !== 'string') {
+        moment.reviewedBy = '';
+        changed = true;
+      }
+    }
+  }
+
+  return changed;
+}
+
 function ensureChatData(db, familyId) {
   let changed = false;
 
@@ -353,7 +429,45 @@ function requireAuth(req, res, db) {
     sendJson(res, 401, { message: '未登录或登录已过期' });
     return null;
   }
+  if (user.isBanned) {
+    sendJson(res, 403, { message: '账号已被封禁，请联系管理员' });
+    return null;
+  }
   return user;
+}
+
+function parseAdminUser(req, db) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token) return null;
+  const session = db.adminSessions.find((item) => item.token === token);
+  if (!session) return null;
+  const admin = db.adminUsers.find((item) => item.id === session.adminId);
+  return admin || null;
+}
+
+function requireAdminAuth(req, res, db) {
+  const admin = parseAdminUser(req, db);
+  if (!admin) {
+    sendJson(res, 401, { message: '管理员未登录或登录已过期' });
+    return null;
+  }
+  return admin;
+}
+
+function pushAdminLog(db, adminId, action, targetType, targetId, detail = '') {
+  db.adminLogs.unshift({
+    id: nextId(db, 'adminLog', 'al'),
+    adminId,
+    action,
+    targetType,
+    targetId,
+    detail,
+    createdAt: new Date().toISOString()
+  });
+  if (db.adminLogs.length > 500) {
+    db.adminLogs = db.adminLogs.slice(0, 500);
+  }
 }
 
 function formatRelativeTime(iso) {
@@ -459,9 +573,10 @@ async function handleSSEStream(req, res, url) {
   }
 
   const db = await loadDB();
+  ensureAdminData(db);
   const session = db.sessions.find((item) => item.token === token);
   const user = session ? db.users.find((item) => item.id === session.userId) : null;
-  if (!user) {
+  if (!user || user.isBanned) {
     sendJson(res, 401, { message: '登录已过期' });
     return;
   }
@@ -489,6 +604,287 @@ async function handleSSEStream(req, res, url) {
 
 async function handleApi(req, res, pathname, url) {
   const db = await loadDB();
+  const adminDataChanged = ensureAdminData(db);
+  if (adminDataChanged) {
+    await saveDB(db);
+  }
+
+  if (req.method === 'POST' && pathname === '/api/admin/auth/login') {
+    const body = await readBody(req);
+    const username = String(body.username || '').trim();
+    const password = String(body.password || '').trim();
+    const admin = db.adminUsers.find((item) => item.username === username && item.password === password);
+    if (!admin) {
+      sendJson(res, 401, { message: '管理员账号或密码错误' });
+      return;
+    }
+    const token = randomBytes(20).toString('hex');
+    db.adminSessions = db.adminSessions.filter((item) => item.adminId !== admin.id);
+    db.adminSessions.push({ token, adminId: admin.id, createdAt: new Date().toISOString() });
+    await saveDB(db);
+    sendJson(res, 200, {
+      token,
+      admin: {
+        id: admin.id,
+        username: admin.username,
+        name: admin.name,
+        role: admin.role
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/overview') {
+    const admin = requireAdminAuth(req, res, db);
+    if (!admin) return;
+    const pendingMoments = db.moments.filter((item) => item.moderationStatus === 'pending').length;
+    const rejectedMoments = db.moments.filter((item) => item.moderationStatus === 'rejected').length;
+    const bannedUsers = db.users.filter((item) => item.isBanned).length;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayPosts = db.moments.filter((item) => new Date(item.createdAt).getTime() >= today.getTime()).length;
+    sendJson(res, 200, {
+      stats: {
+        totalUsers: db.users.length,
+        bannedUsers,
+        totalFamilies: db.families.length,
+        totalMoments: db.moments.length,
+        pendingMoments,
+        rejectedMoments,
+        totalNotifications: db.notifications.length,
+        todayPosts
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/users') {
+    const admin = requireAdminAuth(req, res, db);
+    if (!admin) return;
+    const list = db.users.map((user) => {
+      const family = db.families.find((item) => item.id === user.familyId);
+      const posts = db.moments.filter((item) => item.userId === user.id).length;
+      return {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        role: user.role,
+        avatar: user.avatar,
+        familyId: user.familyId,
+        familyName: family?.name || '未知家族',
+        isBanned: Boolean(user.isBanned),
+        postCount: posts
+      };
+    });
+    sendJson(res, 200, { users: list });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/admin/users/') && pathname.endsWith('/status')) {
+    const admin = requireAdminAuth(req, res, db);
+    if (!admin) return;
+    const userId = pathname.split('/')[4];
+    const body = await readBody(req);
+    const nextBanned = Boolean(body.isBanned);
+    const user = db.users.find((item) => item.id === userId);
+    if (!user) {
+      sendJson(res, 404, { message: '用户不存在' });
+      return;
+    }
+    user.isBanned = nextBanned;
+    if (nextBanned) {
+      db.sessions = db.sessions.filter((item) => item.userId !== userId);
+    }
+    pushAdminLog(
+      db,
+      admin.id,
+      nextBanned ? 'user.ban' : 'user.unban',
+      'user',
+      userId,
+      `${user.name}(${user.phone})`,
+    );
+    await saveDB(db);
+    sendJson(res, 200, { ok: true, userId, isBanned: nextBanned });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/families') {
+    const admin = requireAdminAuth(req, res, db);
+    if (!admin) return;
+    const families = db.families.map((family) => {
+      const users = db.users.filter((item) => item.familyId === family.id);
+      const members = db.members.filter((item) => item.familyId === family.id);
+      const moments = db.moments.filter((item) => item.familyId === family.id);
+      const unreadNotifications = db.notifications.filter((item) => item.familyId === family.id && !item.isRead).length;
+      return {
+        id: family.id,
+        name: family.name,
+        userCount: users.length,
+        memberCount: members.length,
+        momentCount: moments.length,
+        unreadNotifications
+      };
+    });
+    sendJson(res, 200, { families });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/moments') {
+    const admin = requireAdminAuth(req, res, db);
+    if (!admin) return;
+    const status = String(url.searchParams.get('status') || 'all');
+    const familyId = String(url.searchParams.get('familyId') || '');
+    const list = db.moments
+      .filter((item) => (familyId ? item.familyId === familyId : true))
+      .filter((item) => (status === 'all' ? true : item.moderationStatus === status))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map((item) => {
+        const user = db.users.find((u) => u.id === item.userId);
+        const family = db.families.find((f) => f.id === item.familyId);
+        return {
+          id: item.id,
+          familyId: item.familyId,
+          familyName: family?.name || '未知家族',
+          userId: item.userId,
+          userName: user?.name || '未知成员',
+          userPhone: user?.phone || '',
+          content: item.content || '',
+          memoryDate: item.memoryDate || '',
+          createdAt: item.createdAt,
+          imageCount: Array.isArray(item.images) ? item.images.length : 0,
+          hasAudio: Boolean(item.audio?.url),
+          moderationStatus: item.moderationStatus || 'approved',
+          reviewRemark: item.reviewRemark || '',
+          reviewedAt: item.reviewedAt || '',
+          reviewedBy: item.reviewedBy || ''
+        };
+      });
+    sendJson(res, 200, { moments: list });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname.startsWith('/api/admin/moments/') && pathname.endsWith('/review')) {
+    const admin = requireAdminAuth(req, res, db);
+    if (!admin) return;
+    const momentId = pathname.split('/')[4];
+    const body = await readBody(req);
+    const status = String(body.status || '');
+    const reviewRemark = String(body.reviewRemark || '').trim();
+    if (!['approved', 'rejected', 'pending'].includes(status)) {
+      sendJson(res, 400, { message: '审核状态非法' });
+      return;
+    }
+    const moment = db.moments.find((item) => item.id === momentId);
+    if (!moment) {
+      sendJson(res, 404, { message: '动态不存在' });
+      return;
+    }
+    moment.moderationStatus = status;
+    moment.reviewRemark = reviewRemark;
+    moment.reviewedAt = new Date().toISOString();
+    moment.reviewedBy = admin.name;
+
+    if (status === 'rejected') {
+      const notificationId = nextId(db, 'notification', 'n');
+      const created = {
+        id: notificationId,
+        familyId: moment.familyId,
+        type: 'system',
+        avatar: '',
+        sender: '系统通知',
+        action: '下架了一条动态',
+        target: '',
+        time: '刚刚',
+        isRead: false,
+        preview: reviewRemark || '该内容不符合社区规范',
+        image: '',
+        createdAt: new Date().toISOString()
+      };
+      db.notifications.unshift(created);
+      broadcastFamilyEvent(moment.familyId, 'notification-updated', {
+        action: 'create',
+        notification: buildNotificationView(created),
+        unreadCount: computeUnreadCount(db, moment.familyId)
+      });
+    }
+
+    pushAdminLog(db, admin.id, `moment.review.${status}`, 'moment', momentId, reviewRemark);
+    await saveDB(db);
+    sendJson(res, 200, { ok: true, momentId, status });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/notices') {
+    const admin = requireAdminAuth(req, res, db);
+    if (!admin) return;
+    const notices = db.notices
+      .slice()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    sendJson(res, 200, { notices });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/admin/notices') {
+    const admin = requireAdminAuth(req, res, db);
+    if (!admin) return;
+    const body = await readBody(req);
+    const title = String(body.title || '').trim();
+    const content = String(body.content || '').trim();
+    if (!title || !content) {
+      sendJson(res, 400, { message: '公告标题和内容不能为空' });
+      return;
+    }
+    const notice = {
+      id: nextId(db, 'notice', 'nt'),
+      title,
+      content,
+      createdBy: admin.name,
+      createdAt: new Date().toISOString()
+    };
+    db.notices.unshift(notice);
+
+    for (const family of db.families) {
+      const created = {
+        id: nextId(db, 'notification', 'n'),
+        familyId: family.id,
+        type: 'system',
+        avatar: '',
+        sender: '系统公告',
+        action: title,
+        target: '',
+        time: '刚刚',
+        isRead: false,
+        preview: content.slice(0, 80),
+        image: '',
+        createdAt: new Date().toISOString()
+      };
+      db.notifications.unshift(created);
+      broadcastFamilyEvent(family.id, 'notification-updated', {
+        action: 'create',
+        notification: buildNotificationView(created),
+        unreadCount: computeUnreadCount(db, family.id)
+      });
+    }
+
+    pushAdminLog(db, admin.id, 'notice.create', 'notice', notice.id, title);
+    await saveDB(db);
+    sendJson(res, 201, { notice });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/logs') {
+    const admin = requireAdminAuth(req, res, db);
+    if (!admin) return;
+    const logs = db.adminLogs.slice(0, 200).map((item) => {
+      const operator = db.adminUsers.find((u) => u.id === item.adminId);
+      return {
+        ...item,
+        adminName: operator?.name || '未知管理员'
+      };
+    });
+    sendJson(res, 200, { logs });
+    return;
+  }
 
   if (req.method === 'POST' && pathname === '/api/auth/login') {
     const body = await readBody(req);
@@ -496,6 +892,10 @@ async function handleApi(req, res, pathname, url) {
     const user = db.users.find((item) => item.phone === phone && item.password === password);
     if (!user) {
       sendJson(res, 401, { message: '手机号或密码错误' });
+      return;
+    }
+    if (user.isBanned) {
+      sendJson(res, 403, { message: '账号已被封禁，请联系管理员' });
       return;
     }
     const token = randomBytes(20).toString('hex');
@@ -757,6 +1157,7 @@ async function handleApi(req, res, pathname, url) {
     if (!user) return;
     const list = db.moments
       .filter((item) => item.familyId === user.familyId)
+      .filter((item) => item.moderationStatus !== 'rejected')
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .map((item) => normalizeMoment(db, item));
     sendJson(res, 200, { moments: list });
@@ -784,7 +1185,11 @@ async function handleApi(req, res, pathname, url) {
       audio,
       participants,
       location,
-      createdAt: now
+      createdAt: now,
+      moderationStatus: 'approved',
+      reviewRemark: '',
+      reviewedAt: '',
+      reviewedBy: ''
     };
     db.moments.push(moment);
 
@@ -1107,9 +1512,13 @@ async function handleChatUpgrade(req, socket, head, wss) {
 
   try {
     const db = await loadDB();
+    const adminDataChanged = ensureAdminData(db);
+    if (adminDataChanged) {
+      await saveDB(db);
+    }
     const session = db.sessions.find((item) => item.token === token);
     const user = session ? db.users.find((item) => item.id === session.userId) : null;
-    if (!user) {
+    if (!user || user.isBanned) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return true;

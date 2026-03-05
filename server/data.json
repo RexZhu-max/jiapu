@@ -7,7 +7,8 @@
       "name": "林志",
       "role": "家族主理人",
       "avatar": "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&q=80&w=100",
-      "familyId": "f_1"
+      "familyId": "f_1",
+      "isBanned": false
     },
     {
       "id": "u_2",
@@ -16,7 +17,8 @@
       "name": "林建国",
       "role": "父亲",
       "avatar": "https://images.unsplash.com/photo-1697144532799-c94b0344c1cb?auto=format&fit=crop&q=80&w=100",
-      "familyId": "f_1"
+      "familyId": "f_1",
+      "isBanned": false
     },
     {
       "id": "u_3",
@@ -25,7 +27,8 @@
       "name": "林晓",
       "role": "堂姐",
       "avatar": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=100",
-      "familyId": "f_1"
+      "familyId": "f_1",
+      "isBanned": false
     }
   ],
   "families": [
@@ -136,7 +139,11 @@
         "@大伯"
       ],
       "location": "上海",
-      "createdAt": "2026-03-05T08:00:00.000Z"
+      "createdAt": "2026-03-05T08:00:00.000Z",
+      "moderationStatus": "approved",
+      "reviewRemark": "",
+      "reviewedAt": "",
+      "reviewedBy": ""
     },
     {
       "id": "mo_2",
@@ -153,7 +160,11 @@
         "@全员"
       ],
       "location": "苏州",
-      "createdAt": "2026-03-04T09:00:00.000Z"
+      "createdAt": "2026-03-04T09:00:00.000Z",
+      "moderationStatus": "approved",
+      "reviewRemark": "",
+      "reviewedAt": "",
+      "reviewedBy": ""
     },
     {
       "id": "mo_3",
@@ -165,7 +176,11 @@
       "audio": null,
       "participants": [],
       "location": "",
-      "createdAt": "2026-03-05T09:43:54.791Z"
+      "createdAt": "2026-03-05T09:43:54.791Z",
+      "moderationStatus": "approved",
+      "reviewRemark": "",
+      "reviewedAt": "",
+      "reviewedBy": ""
     },
     {
       "id": "mo_4",
@@ -177,7 +192,11 @@
       "audio": null,
       "participants": [],
       "location": "",
-      "createdAt": "2026-03-05T12:30:43.024Z"
+      "createdAt": "2026-03-05T12:30:43.024Z",
+      "moderationStatus": "approved",
+      "reviewRemark": "",
+      "reviewedAt": "",
+      "reviewedBy": ""
     }
   ],
   "notifications": [
@@ -286,6 +305,20 @@
     "notification": 5,
     "media": 1,
     "conversation": 2,
-    "chatMessage": 3
-  }
+    "chatMessage": 3,
+    "notice": 1,
+    "adminLog": 1
+  },
+  "adminUsers": [
+    {
+      "id": "a_1",
+      "username": "admin",
+      "password": "admin123",
+      "name": "系统管理员",
+      "role": "super_admin"
+    }
+  ],
+  "adminSessions": [],
+  "adminLogs": [],
+  "notices": []
 }
