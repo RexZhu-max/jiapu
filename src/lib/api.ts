@@ -1,3 +1,5 @@
+import { resolveAssetUrl, withApiBase } from './native/capabilities';
+
 export type SessionUser = {
   id: string;
   name: string;
@@ -33,6 +35,47 @@ interface UploadMediaOptions {
 
 const SESSION_KEY = 'heritage.session';
 
+function normalizeMoment(moment: any) {
+  if (!moment) return moment;
+  return {
+    ...moment,
+    user: moment.user
+      ? {
+          ...moment.user,
+          avatar: resolveAssetUrl(moment.user.avatar || ''),
+        }
+      : moment.user,
+    images: Array.isArray(moment.images) ? moment.images.map((url: string) => resolveAssetUrl(url || '')) : [],
+    audio: moment.audio
+      ? {
+          ...moment.audio,
+          url: resolveAssetUrl(moment.audio.url || ''),
+        }
+      : moment.audio,
+  };
+}
+
+function normalizeNotification(notification: any) {
+  if (!notification) return notification;
+  return {
+    ...notification,
+    avatar: resolveAssetUrl(notification.avatar || ''),
+    image: resolveAssetUrl(notification.image || ''),
+  };
+}
+
+function normalizeGenerations(generations: any[] = []) {
+  return generations.map((generation) => ({
+    ...generation,
+    members: Array.isArray(generation.members)
+      ? generation.members.map((member: any) => ({
+          ...member,
+          img: resolveAssetUrl(member.img || ''),
+        }))
+      : [],
+  }));
+}
+
 async function apiFetch<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type') && options.body) {
@@ -42,7 +85,7 @@ async function apiFetch<T>(path: string, options: RequestInit = {}, token?: stri
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const res = await fetch(path, { ...options, headers });
+  const res = await fetch(withApiBase(path), { ...options, headers });
   if (!res.ok) {
     let message = '请求失败';
     try {
@@ -133,7 +176,7 @@ function uploadByXHR<T>(
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', path, true);
+    xhr.open('POST', withApiBase(path), true);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
@@ -206,14 +249,20 @@ export function subscribeRealtime(
   onEvent: (event: RealtimeEvent) => void,
   onError?: (error: Event) => void,
 ) {
-  const streamUrl = `/api/stream?token=${encodeURIComponent(token)}`;
+  const streamUrl = withApiBase(`/api/stream?token=${encodeURIComponent(token)}`);
   const source = new EventSource(streamUrl);
 
   const bind = (eventName: RealtimeEventName) => {
     source.addEventListener(eventName, (event) => {
       try {
         const message = event as MessageEvent;
-        const data = message.data ? JSON.parse(message.data) : {};
+        let data = message.data ? JSON.parse(message.data) : {};
+        if (eventName === 'moment-updated' && data?.moment) {
+          data = { ...data, moment: normalizeMoment(data.moment) };
+        }
+        if (eventName === 'notification-updated' && data?.notification) {
+          data = { ...data, notification: normalizeNotification(data.notification) };
+        }
         onEvent({ type: eventName, data });
       } catch {
         onEvent({ type: eventName, data: {} });
@@ -235,18 +284,34 @@ export function subscribeRealtime(
 }
 
 export async function login(phone: string, password: string): Promise<Session> {
-  return apiFetch<Session>('/api/auth/login', {
+  const data = await apiFetch<Session>('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ phone, password }),
   });
+  return {
+    ...data,
+    user: {
+      ...data.user,
+      avatar: resolveAssetUrl(data.user?.avatar || ''),
+    },
+  };
 }
 
 export async function getMe(token: string) {
-  return apiFetch<{ user: SessionUser }>('/api/auth/me', {}, token);
+  const data = await apiFetch<{ user: SessionUser }>('/api/auth/me', {}, token);
+  return {
+    user: {
+      ...data.user,
+      avatar: resolveAssetUrl(data.user?.avatar || ''),
+    },
+  };
 }
 
 export async function getMoments(token: string) {
-  return apiFetch<{ moments: any[] }>('/api/moments', {}, token);
+  const data = await apiFetch<{ moments: any[] }>('/api/moments', {}, token);
+  return {
+    moments: (data.moments || []).map((moment) => normalizeMoment(moment)),
+  };
 }
 
 export async function createMoment(
@@ -260,10 +325,13 @@ export async function createMoment(
     location?: string;
   },
 ) {
-  return apiFetch<{ moment: any }>('/api/moments', {
+  const data = await apiFetch<{ moment: any }>('/api/moments', {
     method: 'POST',
     body: JSON.stringify(payload),
   }, token);
+  return {
+    moment: normalizeMoment(data.moment),
+  };
 }
 
 export async function uploadMedia(
@@ -281,14 +349,19 @@ export async function uploadMedia(
     type,
   });
 
-  return withRetry(
+  const result = await withRetry(
     () => uploadByXHR<{ id: string; url: string; type: string }>('/api/media/upload', body, token, onProgress, signal),
     retries,
   );
+  return result;
 }
 
 export async function getNotifications(token: string) {
-  return apiFetch<{ notifications: any[]; unreadCount: number }>('/api/notifications', {}, token);
+  const data = await apiFetch<{ notifications: any[]; unreadCount: number }>('/api/notifications', {}, token);
+  return {
+    unreadCount: data.unreadCount || 0,
+    notifications: (data.notifications || []).map((item) => normalizeNotification(item)),
+  };
 }
 
 export async function markNotificationRead(token: string, id: string) {
@@ -316,29 +389,45 @@ export async function clearReadNotifications(token: string) {
 }
 
 export async function getFamilyTree(token: string) {
-  return apiFetch<{ generations: any[] }>('/api/family/tree', {}, token);
+  const data = await apiFetch<{ generations: any[] }>('/api/family/tree', {}, token);
+  return {
+    generations: normalizeGenerations(data.generations || []),
+  };
 }
 
 export async function createGeneration(
   token: string,
   payload: { title: string; description?: string; position?: 'before' | 'after' },
 ) {
-  return apiFetch<{ generations: any[] }>('/api/family/generations', {
+  const data = await apiFetch<{ generations: any[] }>('/api/family/generations', {
     method: 'POST',
     body: JSON.stringify(payload),
   }, token);
+  return {
+    generations: normalizeGenerations(data.generations || []),
+  };
 }
 
 export async function createMember(token: string, payload: any) {
-  return apiFetch<{ generations: any[] }>('/api/family/members', {
+  const data = await apiFetch<{ generations: any[] }>('/api/family/members', {
     method: 'POST',
     body: JSON.stringify(payload),
   }, token);
+  return {
+    generations: normalizeGenerations(data.generations || []),
+  };
 }
 
 export async function updateMember(token: string, memberId: string, payload: any) {
-  return apiFetch<{ generations: any[] }>(`/api/family/members/${memberId}`, {
+  const data = await apiFetch<{ generations: any[] }>(`/api/family/members/${memberId}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   }, token);
+  return {
+    generations: normalizeGenerations(data.generations || []),
+  };
+}
+
+export function resolveClientUrl(url: string) {
+  return resolveAssetUrl(url || '');
 }

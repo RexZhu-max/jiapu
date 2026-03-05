@@ -6,8 +6,34 @@
 
 ## [Unreleased]
 
+### Added
+- 接入 Capacitor 与 iOS/Android 原生工程骨架（`android/`, `ios/`, `capacitor.config.json`）。
+- 新增原生能力封装（`src/lib/native/capabilities.ts`）：
+  - 平台识别与 API 基础地址解析
+  - 相册多选与相机拍照文件转换
+  - 麦克风权限检查
+  - 推送注册初始化与 token 本地缓存
+- 新增 App 壳相关命令：
+  - `mobile:build`
+  - `cap:copy`
+  - `cap:sync`
+  - `cap:open:ios`
+  - `cap:open:android`
+  - `cap:run:ios`
+  - `cap:run:android`
+
+### Changed
+- API 层支持壳内访问后端：
+  - 自动根据运行平台解析请求基址（Web/Android/iOS）
+  - SSE 地址在壳内改为可访问的绝对路径
+  - 动态、通知、家谱返回数据中的媒体地址统一规范化
+- 动态发布页接入原生媒体能力：
+  - 原生端支持系统相册多选上传
+  - 原生端支持拍照后直接上传
+- 录音发布前增加麦克风权限检查。
+- `README` 增加 Web+壳完整启动说明与真机联调配置。
+
 ### Planned
-- Capacitor 壳接入（Android/iOS 工程骨架）
 - 上传任务单文件重试与失败项继续处理
 - 通知与动态局部更新进一步细化（减少闪烁与重复请求）
 
@@ -54,4 +80,3 @@
 ### Notes
 - 当前为 MVP 阶段，支付与会员能力按需求暂未接入。
 - 当前后端为本地 JSON 存储方案，适合开发与联调，不建议直接用于生产环境。
-

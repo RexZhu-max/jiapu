@@ -22,6 +22,7 @@ import {
   subscribeRealtime,
   type Session,
 } from './lib/api';
+import { bootstrapPushNotifications } from './lib/native/capabilities';
 import { trackEvent } from './lib/telemetry';
 
 const ActionSheet = ({ isOpen, onClose, onSelect }: { isOpen: boolean; onClose: () => void; onSelect: (action: string) => void }) => {
@@ -151,6 +152,11 @@ export default function App() {
     refreshMoments();
     refreshUnreadCount();
   }, [token, refreshMoments, refreshUnreadCount]);
+
+  useEffect(() => {
+    if (!token) return;
+    bootstrapPushNotifications();
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;

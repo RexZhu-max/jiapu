@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { X, Mic, Square, Play, Pause, Save, Trash2, Volume2, Loader2 } from 'lucide-react';
 import { createMoment, uploadMedia } from '../../lib/api';
+import { ensureMicrophonePermission } from '../../lib/native/capabilities';
 import { StatusNotice } from '../common/StatusNotice';
 import { trackEvent } from '../../lib/telemetry';
 
@@ -52,6 +53,7 @@ export const VoiceRecorderView = ({ token, onClose, onPublished }: VoiceRecorder
   const startRecording = async () => {
     setError('');
     try {
+      await ensureMicrophonePermission();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       const mediaRecorder = new MediaRecorder(stream);

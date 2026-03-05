@@ -1,13 +1,15 @@
 import React, { useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Plus, Loader2, ChevronRight } from 'lucide-react';
-import { createMoment, uploadMedia } from '../../lib/api';
+import { X, Plus, Loader2, ChevronRight, Camera as CameraIcon } from 'lucide-react';
+import { createMoment, resolveClientUrl, uploadMedia } from '../../lib/api';
+import { isNativeApp, pickImagesFromGallery, takePhotoFromCamera } from '../../lib/native/capabilities';
 import { StatusNotice } from '../common/StatusNotice';
 import { trackEvent } from '../../lib/telemetry';
 
 type MediaItem = {
   id: string;
   url: string;
+  previewUrl: string;
 };
 
 interface CreateMemoryViewProps {
@@ -29,13 +31,9 @@ export const CreateMemoryView = ({ token, onClose, onPublished }: CreateMemoryVi
   const [info, setInfo] = useState('');
   const pickerRef = useRef<HTMLInputElement>(null);
   const controllersRef = useRef<AbortController[]>([]);
+  const nativeEnabled = isNativeApp();
 
-  const handlePickFiles = () => {
-    pickerRef.current?.click();
-  };
-
-  const handleFilesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = Array.from(e.target.files || []);
+  const uploadSelectedFiles = async (selected: File[]) => {
     if (selected.length === 0) return;
     setError('');
     setUploading(true);
@@ -78,7 +76,7 @@ export const CreateMemoryView = ({ token, onClose, onPublished }: CreateMemoryVi
             });
             progressByIndex[i] = 100;
             updateTotalProgress();
-            uploaded[i] = { id: saved.id, url: saved.url };
+            uploaded[i] = { id: saved.id, url: saved.url, previewUrl: resolveClientUrl(saved.url) };
             setUploadDoneCount((prev) => prev + 1);
             trackEvent('media.upload.file.success', { name: file.name, type: mediaType });
           } finally {
@@ -110,8 +108,41 @@ export const CreateMemoryView = ({ token, onClose, onPublished }: CreateMemoryVi
       setUploadDoneCount(0);
       setUploadTotalCount(0);
       setTimeout(() => setUploadProgress(0), 300);
-      e.target.value = '';
     }
+  };
+
+  const handlePickFiles = async () => {
+    if (uploading || publishing) return;
+    if (!nativeEnabled) {
+      pickerRef.current?.click();
+      return;
+    }
+
+    try {
+      const selected = await pickImagesFromGallery(9);
+      await uploadSelectedFiles(selected);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '无法读取系统相册';
+      setError(message);
+    }
+  };
+
+  const handleTakePhoto = async () => {
+    if (uploading || publishing) return;
+    try {
+      const photo = await takePhotoFromCamera();
+      if (!photo) return;
+      await uploadSelectedFiles([photo]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '拍照失败';
+      setError(message);
+    }
+  };
+
+  const handleFilesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files || []);
+    await uploadSelectedFiles(selected);
+    e.target.value = '';
   };
 
   const handleCancelUpload = () => {
@@ -189,7 +220,7 @@ export const CreateMemoryView = ({ token, onClose, onPublished }: CreateMemoryVi
         <div className="flex flex-wrap gap-3">
           {files.map((file, i) => (
             <div key={file.id || i} className="relative w-24 h-24 rounded-[8px] overflow-hidden border border-[#EBEBE6]">
-              <img src={file.url} className="w-full h-full object-cover" />
+              <img src={file.previewUrl} className="w-full h-full object-cover" />
               <button
                 onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
                 className="absolute top-1 right-1 w-5 h-5 bg-black/50 rounded-full text-white flex items-center justify-center"
@@ -204,8 +235,18 @@ export const CreateMemoryView = ({ token, onClose, onPublished }: CreateMemoryVi
             className="w-24 h-24 bg-[#E5E5EA]/50 border border-[#EBEBE6] rounded-[8px] flex flex-col items-center justify-center text-[#8E8E93] active:bg-[#E5E5EA] transition-colors"
           >
             {uploading ? <Loader2 className="w-5 h-5 mb-1 animate-spin" /> : <Plus className="w-6 h-6 mb-1" />}
-            <span className="text-[10px]">{uploading ? '上传中' : '添加照片'}</span>
+            <span className="text-[10px]">{uploading ? '上传中' : nativeEnabled ? '系统相册' : '添加照片'}</span>
           </button>
+          {nativeEnabled ? (
+            <button
+              onClick={handleTakePhoto}
+              disabled={uploading}
+              className="w-24 h-24 bg-[#1D1D1F] border border-[#1D1D1F] rounded-[8px] flex flex-col items-center justify-center text-white active:opacity-90 transition-opacity"
+            >
+              <CameraIcon className="w-5 h-5 mb-1" />
+              <span className="text-[10px]">拍照上传</span>
+            </button>
+          ) : null}
         </div>
 
         {error ? <StatusNotice kind="error" text={error} className="mt-3" /> : null}

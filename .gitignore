@@ -19,3 +19,13 @@ npm-debug.log*
 # runtime uploads
 server/storage/uploads/*
 !server/storage/uploads/.gitkeep
+
+# capacitor native build artifacts
+android/.gradle/
+android/local.properties
+android/app/build/
+android/capacitor-cordova-android-plugins/
+ios/App/App/public/
+ios/App/build/
+ios/App/Pods/
+ios/App/DerivedData/
